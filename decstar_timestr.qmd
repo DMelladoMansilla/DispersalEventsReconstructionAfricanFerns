@@ -1,0 +1,393 @@
+---
+title: "models"
+format: html
+editor: visual
+---
+
+# Library
+
+```{r}
+pacman::p_load(BioGeoBEARS,dplyr,doRNG,tidyr,readr,stringr,picante,optimx,FD,snow,parallel, phytools,tictoc, doParallel)
+```
+
+# Directory
+
+```{r}
+setwd("~/docus/decstar_timestrat")
+getwd()
+```
+
+# Phylogeny
+
+```{r}
+devtools::install_github("fernphy/ftolr")
+library(ftolr)
+
+library(ape)
+
+#Maximum-likelihood (ML) tree with raw branchlengths and outgroup pruned
+
+phy <- ft_tree(branch_len = "ultra", rooted = TRUE, drop_og = TRUE)
+
+is.ultrametric(phy)
+tree_ultrametric <- force.ultrametric(phy, method = "nnls")
+is.ultrametric(tree_ultrametric)
+
+print(class(tree_ultrametric))
+
+```
+
+# Data
+
+```{r}
+treeconrealms<-read_delim("treeconrealms.csv", 
+delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+```
+
+### Phylip format
+
+```{r}
+num_species <- nrow(treeconrealms)
+num_areas <- ncol(treeconrealms) - 1 
+ 
+first_line <- paste(num_species, num_areas, "(A B C D E)", sep = "\t")
+ 
+# Create the subsequent lines
+ lines <- apply(treeconrealms, 1, function(row) {
+   species <- row[1]
+   presence_absence <- paste(row[-1], collapse = "")
+   paste(species, presence_absence, sep = "\t")
+ })
+ 
+ phylip_content <- c(first_line, lines)
+ 
+writeLines(phylip_content, "output.phy")
+```
+
+### Pruning the tree
+
+```{r}
+especies_con_datos<-select(treeconrealms,spp)
+especies_con_datos<-as.data.frame(especies_con_datos)
+
+row.names(especies_con_datos)<-especies_con_datos$spp
+
+match<-match.phylo.data(tree_ultrametric,especies_con_datos)
+treegg<-(match$phy)
+
+write.tree(treegg, file="mi_arbol.newick")
+tree <- read.tree("mi_arbol.newick")
+is_ultrametric <- is.ultrametric(tree)
+print(paste("Is the tree ultrametric?", is_ultrametric))
+min(tree$edge.length)
+#0.039417 0.052139 0.04065446
+# plot(tree)
+# title("nittatree pruned")
+# axisPhylo()
+
+root_age <- max(node.depth.edgelength(tree))
+print(root_age)
+#421.9023
+```
+
+# Setup the DEC\* STAR
+
+```{r}
+BioGeoBEARS_run_object = define_BioGeoBEARS_run()
+```
+
+# Location of the input files
+
+```{r}
+BioGeoBEARS_run_object$trfn = np("mi_arbol.newick")
+tr = read.tree(BioGeoBEARS_run_object$trfn)
+is_ultrametric <- is.ultrametric(tr)
+print(paste("Is the tree ultrametric?", is_ultrametric))
+
+BioGeoBEARS_run_object$geogfn = np("output.phy")
+#Look at your geographic range data
+tipranges <- getranges_from_LagrangePHYLIP(lgdata_fn=BioGeoBEARS_run_object$geogfn)
+tipranges
+```
+
+# Time periods
+
+```{r}
+time_intervals <- c(2.58, 5.33, 23.03, 33.09, 56.0001, 66, 422)
+
+# Write the time intervals to a new text file
+writeLines(as.character(time_intervals), "clean_timeperiods.txt")
+
+BioGeoBEARS_run_object$timeperiods = c(2.58, 5.33, 23.03, 33.09, 56.0001, 66, 422)
+BioGeoBEARS_run_object$timesfn = "clean_timeperiods.txt"
+```
+
+# Configure the analysis
+
+## Cluster
+
+```{r}
+cl <- makeCluster(20, type = "FORK")
+BioGeoBEARS_run_object$num_cores_to_use = 20
+BioGeoBEARS_run_object$cluster_already_open = cl
+```
+
+## Other parameters
+
+```{r}
+BioGeoBEARS_run_object$max_range_size = 5 
+#BioGeoBEARS_run_object$min_branchlength = 0.0001
+BioGeoBEARS_run_object$include_null_range = FALSE
+BioGeoBEARS_run_object$force_sparse = FALSE
+
+# Good default settings to get ancestral states
+BioGeoBEARS_run_object$return_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_TTL_loglike_from_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_ancprobs = TRUE
+
+
+BioGeoBEARS_run_object$use_optimx = TRUE
+
+BioGeoBEARS_run_object = section_the_tree(inputs=BioGeoBEARS_run_object, make_master_table=TRUE, plot_pieces=FALSE, cut_fossils = FALSE)
+# Check the stratified tree description in this table:
+BioGeoBEARS_run_object$master_table
+```
+
+# Run DEC\*
+
+```{r}
+tic()
+runslow = TRUE
+resfn = "res_DECStar_time.Rdata"
+if (runslow)
+    {
+    res = bears_optim_run(BioGeoBEARS_run_object)
+    res    
+
+    save(res, file=resfn)
+    resDECStar = res
+    } else {
+    # Loads to "res"
+    load(resfn)
+    resDECStar = res
+    }
+
+
+toc()
+
+
+stopCluster(cl)
+#2465.257 sec elapsed=41 minutos
+
+save.image(file = "after_optim.RData")
+```
+
+# BSM
+
+```{r}
+
+load("after_optim.RData")
+model_name <- "DECStar_time"
+outputdir <- np("output_bsm")
+```
+
+You can add options to executable code like this
+
+```{r}
+clado_events_tables <- NULL
+ana_events_tables <- NULL
+lnum <- 0
+```
+
+```{r}
+
+BSM_inputs_fn <- paste0(outputdir, "/BSM_inputs_file.Rdata")
+
+runInputsSlow <- TRUE
+if (runInputsSlow)
+{
+  stochastic_mapping_inputs_list <- get_inputs_for_stochastic_mapping(res=res)
+  save(stochastic_mapping_inputs_list, file=BSM_inputs_fn)
+} else {
+  # Loads to "stochastic_mapping_inputs_list"
+  load(BSM_inputs_fn)
+} # END if (runInputsSlow)
+```
+
+```{r}
+tic()
+runBSMslow <- TRUE
+if (runBSMslow == TRUE)
+{
+  # Saves to: RES_clado_events_tables.Rdata
+  # Saves to: RES_ana_events_tables.Rdata
+  BSM_output <- runBSM(res, stochastic_mapping_inputs_list =
+                         stochastic_mapping_inputs_list,
+                       maxnum_maps_to_try=100, nummaps_goal=100,
+                       maxtries_per_branch=40000,
+                       save_after_every_try=TRUE,
+                       savedir = outputdir,
+                       seedval=12345,
+                       wait_before_save=0.01)
+  RES_clado_events_tables <- BSM_output$RES_clado_events_tables
+  RES_ana_events_tables <- BSM_output$RES_ana_events_tables
+} else {
+  # Load previously saved...
+  # Loads to: RES_clado_events_tables
+  load(file= paste0(outputdir, "/RES_clado_events_tables.Rdata"))
+  # Loads to: RES_ana_events_tables
+  load(file= paste0(outputdir, "/RES_ana_events_tables.Rdata"))
+  BSM_output <- NULL
+  BSM_output$RES_clado_events_tables <- RES_clado_events_tables
+  BSM_output$RES_ana_events_tables <- RES_ana_events_tables
+} # END if (runBSMslow == TRUE)
+
+toc()
+#8534.651 sec elapsed
+#2.370737 hrs
+save.image("afterbsm.RData")
+```
+
+### Extract BSM output
+
+```{r}
+load("afterbsm.RData")
+
+clado_events_tables <- BSM_output$RES_clado_events_tables
+ana_events_tables <- BSM_output$RES_ana_events_tables
+
+include_null_range <- FALSE
+areanames <- names(tipranges@df)
+areas <- areanames
+max_range_size <- 5
+```
+
+Set extraction directory
+
+```{r}
+scriptdir <-  np("output_bsm")
+stratified <- TRUE
+clado_events_table <- clado_events_tables[[1]]
+ana_events_table <- ana_events_tables[[1]]
+```
+
+Summarize stochastic map tables
+
+```{r}
+tic()
+
+areanames = names(tipranges@df)
+actual_names = areanames
+
+
+# Get the dmat and times (if any)
+dmat_times = get_dmat_times_from_res(res=res, numstates=NULL)
+
+
+# Extract BSM output
+clado_events_tables = BSM_output$RES_clado_events_tables
+ana_events_tables = BSM_output$RES_ana_events_tables
+
+# Simulate the source areas
+BSMs_w_sourceAreas = simulate_source_areas_ana_clado(res, clado_events_tables, ana_events_tables, areanames)
+clado_events_tables = BSMs_w_sourceAreas$clado_events_tables
+ana_events_tables = BSMs_w_sourceAreas$ana_events_tables
+
+# Count all anagenetic and cladogenetic events
+counts_list = count_ana_clado_events(clado_events_tables, ana_events_tables, areanames, actual_names)
+
+summary_counts_BSMs = counts_list$summary_counts_BSMs
+print(conditional_format_table(summary_counts_BSMs))
+
+# Histogram of event counts
+hist_event_counts(counts_list, pdffn=paste0(model_name, "_histograms_of_event_counts.pdf"))
+
+# Print counts to files
+tmpnames = names(counts_list)
+cat("\n\nWriting tables* of counts to tab-delimited text files:\n(* = Tables have dimension=2 (rows and columns). Cubes (dimension 3) and lists (dimension 1) will not be printed to text files.) \n\n")
+for (i in 1:length(tmpnames))
+{
+  cmdtxt = paste0("item = counts_list$", tmpnames[i])
+  eval(parse(text=cmdtxt))
+
+  # Skip cubes
+  if (length(dim(item)) != 2)
+  {
+    next()
+  }
+
+  outfn = paste0(tmpnames[i], ".txt")
+  if (length(item) == 0)
+  {
+    cat(outfn, " -- NOT written, *NO* events recorded of this type", sep="")
+    cat("\n")
+  } else {
+    cat(outfn)
+    cat("\n")
+    write.table(conditional_format_table(item), file=outfn, quote=FALSE, sep="\t", col.names=TRUE, row.names=TRUE)
+  } # END if (length(item) == 0)
+} # END for (i in 1:length(tmpnames))
+cat("...done.\n")
+outfn
+
+# Check that ML ancestral state/range probabilities and
+# the mean of the BSMs approximately line up
+
+library(MultinomialCI)    # For 95% CIs on BSM counts
+check_ML_vs_BSM(res, clado_events_tables, model_name, tr=NULL, plot_each_node=FALSE, linreg_plot=TRUE, MultinomialCI=TRUE)
+
+toc()
+#2662
+# minutes
+```
+
+```{r}
+source("Function_table_export_bsm.R")
+
+# # ahora sacar la info por edades time_intervals <- c(2.58, 5.33, 23.03, 33.09, 56.0001, 66, 422)
+
+counts_list_Pleistocene = count_ana_clado_events(clado_events_tables,
+ ana_events_tables, areanames, actual_names, timeperiod = c(0, 2.58))
+bsm_table_export(counts_list_Pleistocene, "Pleistocene")
+#
+# ################################################################################
+# ################################################################################
+counts_list_Pliocene = count_ana_clado_events(clado_events_tables,
+           ana_events_tables, areanames, actual_names, timeperiod = c(2.59, 5.33))
+
+ bsm_table_export(counts_list_Pliocene, "Pliocene")
+
+################################################################################
+#################################################################################
+
+counts_list_Miocene = count_ana_clado_events(clado_events_tables,
+           ana_events_tables, areanames, actual_names, timeperiod = c(5.33, 23.03))
+bsm_table_export(counts_list_Miocene, "Miocene")
+# ################################################################################
+# ################################################################################
+counts_list_Oligocene = count_ana_clado_events(clado_events_tables,
+  ana_events_tables, areanames, actual_names, timeperiod = c(23.03, 33.09))
+
+bsm_table_export(counts_list_Oligocene, "Oligocene")
+# ###############################################################################
+# ################################################################################
+counts_list_Eocene = count_ana_clado_events(clado_events_tables,
+ana_events_tables, areanames, actual_names, timeperiod = c(33.09, 56.0001))
+
+bsm_table_export(counts_list_Eocene, "Eocene")
+# ################################################################################
+# ################################################################################
+counts_list_Paleocene = count_ana_clado_events(clado_events_tables,
+             ana_events_tables, areanames, actual_names, timeperiod = c(56.0001, 66))
+bsm_table_export(counts_list_Paleocene, "Paleocene")
+# ################################################################################
+# ################################################################################
+counts_list_MesoPaleo = count_ana_clado_events(clado_events_tables,
+             ana_events_tables, areanames, actual_names, timeperiod = c(66, 422))
+bsm_table_export(counts_list_MesoPaleo, "MesoPaleo")
+#
+
+save.image("tables.RData")
+
+```
