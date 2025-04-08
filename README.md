@@ -1,0 +1,1 @@
+This repository contains the codes and general outputs of the ancestral range reconstruction performed as part of the results of the preprint "Paleogene mass extinction and ongoing Neogene recolonization shape the tropical African flora"
