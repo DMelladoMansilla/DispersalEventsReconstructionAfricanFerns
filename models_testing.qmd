@@ -1,0 +1,564 @@
+---
+title: "models"
+format: html
+editor: visual
+---
+
+# Library
+
+```{r}
+pacman::p_load(BioGeoBEARS,dplyr,doRNG,tidyr,readr,stringr,picante,optimx,FD,snow,parallel, phytools,tictoc, doParallel)
+```
+
+# Directory
+
+```{r}
+setwd("~/docus/model_selection")
+getwd()
+```
+
+# Phylogeny
+
+```{r}
+devtools::install_github("fernphy/ftolr")
+library(ftolr)
+
+library(ape)
+
+
+phy <- ft_tree(branch_len = "ultra", rooted = TRUE, drop_og = TRUE)
+
+is.ultrametric(phy)
+tree_ultrametric <- force.ultrametric(phy, method = "nnls")
+is.ultrametric(tree_ultrametric)
+
+```
+
+# Data
+
+```{r}
+treeconrealms<-read_delim("treeconrealms.csv", 
+delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+```
+
+### Phylip format
+
+```{r}
+num_species <- nrow(treeconrealms)
+num_areas <- ncol(treeconrealms) - 1 
+ 
+first_line <- paste(num_species, num_areas, "(A B C D E)", sep = "\t")
+ 
+# Create the subsequent lines
+ lines <- apply(treeconrealms, 1, function(row) {
+   species <- row[1]
+   presence_absence <- paste(row[-1], collapse = "")
+   paste(species, presence_absence, sep = "\t")
+ })
+ 
+ phylip_content <- c(first_line, lines)
+ 
+writeLines(phylip_content, "output.phy")
+```
+
+### Pruning the tree
+
+```{r}
+especies_con_datos<-select(treeconrealms,spp)
+especies_con_datos<-as.data.frame(especies_con_datos)
+
+row.names(especies_con_datos)<-especies_con_datos$spp
+
+match<-match.phylo.data(tree_ultrametric,especies_con_datos)
+treegg<-(match$phy)
+
+write.tree(treegg, file="mi_arbol.newick")
+tree <- read.tree("mi_arbol.newick")
+is_ultrametric <- is.ultrametric(tree)
+print(paste("Is the tree ultrametric?", is_ultrametric))
+min(tree$edge.length)
+#0.039417 0.052139 0.04065446
+# plot(tree)
+# title("nittatree pruned")
+# axisPhylo()
+
+root_age <- max(node.depth.edgelength(tree))
+print(root_age)
+#421.9023
+```
+
+# Setup the DEC model
+
+```{r}
+BioGeoBEARS_run_object = define_BioGeoBEARS_run()
+```
+
+# Location of the input files
+
+```{r}
+BioGeoBEARS_run_object$trfn = np("mi_arbol.newick")
+tr = read.tree(BioGeoBEARS_run_object$trfn)
+is_ultrametric <- is.ultrametric(tr)
+print(paste("Is the tree ultrametric?", is_ultrametric))
+
+BioGeoBEARS_run_object$geogfn = np("output.phy")
+#Look at your geographic range data
+tipranges <- getranges_from_LagrangePHYLIP(lgdata_fn=BioGeoBEARS_run_object$geogfn)
+tipranges
+```
+
+# Time periods
+
+```{r}
+time_intervals <- c(2.58, 5.33, 23.03, 33.09, 56.0001, 66, 422)
+
+writeLines(as.character(time_intervals), "clean_timeperiods.txt")
+
+BioGeoBEARS_run_object$timeperiods = c(2.58, 5.33, 23.03, 33.09, 56.0001, 66, 422)
+BioGeoBEARS_run_object$timesfn = "clean_timeperiods.txt"
+```
+
+# Configure the analysis
+
+## Cluster
+
+```{r}
+cl <- makeCluster(20, type = "FORK")
+BioGeoBEARS_run_object$num_cores_to_use = 20
+BioGeoBEARS_run_object$cluster_already_open = cl
+```
+
+## Other parameters
+
+```{r}
+BioGeoBEARS_run_object$max_range_size = 5 
+BioGeoBEARS_run_object$include_null_range = TRUE
+BioGeoBEARS_run_object$force_sparse = FALSE
+
+BioGeoBEARS_run_object$return_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_TTL_loglike_from_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_ancprobs = TRUE
+
+
+BioGeoBEARS_run_object$use_optimx = TRUE
+
+BioGeoBEARS_run_object = section_the_tree(inputs=BioGeoBEARS_run_object, make_master_table=TRUE, plot_pieces=FALSE, cut_fossils = FALSE)
+BioGeoBEARS_run_object$master_table
+```
+
+# Run DEC
+
+```{r}
+tic()
+runslow = TRUE
+resfn = "res_DEC_Time.Rdata"
+if (runslow)
+    {
+    res = bears_optim_run(BioGeoBEARS_run_object)
+    res    
+
+    save(res, file=resfn)
+    resDEC = res
+    } else {
+    # Loads to "res"
+    load(resfn)
+    resDEC = res
+    }
+
+
+toc()
+
+
+stopCluster(cl)
+
+
+
+```
+
+# Setup the DEC\* STAR
+
+```{r}
+BioGeoBEARS_run_object = define_BioGeoBEARS_run()
+```
+
+# Location of the input files
+
+```{r}
+BioGeoBEARS_run_object$trfn = np("mi_arbol.newick")
+tr = read.tree(BioGeoBEARS_run_object$trfn)
+is_ultrametric <- is.ultrametric(tr)
+print(paste("Is the tree ultrametric?", is_ultrametric))
+
+BioGeoBEARS_run_object$geogfn = np("output.phy")
+tipranges <- getranges_from_LagrangePHYLIP(lgdata_fn=BioGeoBEARS_run_object$geogfn)
+tipranges
+```
+
+# Time periods
+
+```{r}
+time_intervals <- c(2.58, 5.33, 23.03, 33.09, 56.0001, 66, 422)
+
+writeLines(as.character(time_intervals), "clean_timeperiods.txt")
+
+BioGeoBEARS_run_object$timeperiods = c(2.58, 5.33, 23.03, 33.09, 56.0001, 66, 422)
+BioGeoBEARS_run_object$timesfn = "clean_timeperiods.txt"
+```
+
+# Configure the analysis
+
+## Cluster
+
+```{r}
+cl <- makeCluster(20, type = "FORK")
+BioGeoBEARS_run_object$num_cores_to_use = 20
+BioGeoBEARS_run_object$cluster_already_open = cl
+```
+
+## Other parameters
+
+```{r}
+BioGeoBEARS_run_object$max_range_size = 5 
+BioGeoBEARS_run_object$include_null_range = FALSE
+BioGeoBEARS_run_object$force_sparse = FALSE
+
+BioGeoBEARS_run_object$return_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_TTL_loglike_from_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_ancprobs = TRUE
+
+
+BioGeoBEARS_run_object$use_optimx = TRUE
+
+BioGeoBEARS_run_object = section_the_tree(inputs=BioGeoBEARS_run_object, make_master_table=TRUE, plot_pieces=FALSE, cut_fossils = FALSE)
+BioGeoBEARS_run_object$master_table
+```
+
+# Run DEC\*
+
+```{r}
+tic()
+runslow = TRUE
+resfn = "res_DECStar_Time.Rdata"
+if (runslow)
+    {
+    res = bears_optim_run(BioGeoBEARS_run_object)
+    res    
+
+    save(res, file=resfn)
+    resDECStar = res
+    } else {
+    # Loads to "res"
+    load(resfn)
+    resDECStar = res
+    }
+
+
+toc()
+
+
+stopCluster(cl)
+
+```
+
+# DIVALIKE
+
+# Setup the model
+
+```{r}
+BioGeoBEARS_run_object = define_BioGeoBEARS_run()
+```
+
+# Location of the input files
+
+```{r}
+BioGeoBEARS_run_object$trfn = np("mi_arbol.newick")
+tr = read.tree(BioGeoBEARS_run_object$trfn)
+is_ultrametric <- is.ultrametric(tr)
+print(paste("Is the tree ultrametric?", is_ultrametric))
+
+BioGeoBEARS_run_object$geogfn = np("output.phy")
+tipranges <- getranges_from_LagrangePHYLIP(lgdata_fn=BioGeoBEARS_run_object$geogfn)
+tipranges
+```
+
+# Time periods
+
+```{r}
+time_intervals <- c(2.58, 5.33, 23.03, 33.09, 56.0001, 66, 422)
+
+writeLines(as.character(time_intervals), "clean_timeperiods.txt")
+
+BioGeoBEARS_run_object$timeperiods = c(2.58, 5.33, 23.03, 33.09, 56.0001, 66, 422)
+BioGeoBEARS_run_object$timesfn = "clean_timeperiods.txt"
+```
+
+# Configure the analysis
+
+## Cluster
+
+```{r}
+cl <- makeCluster(20, type = "FORK")
+BioGeoBEARS_run_object$num_cores_to_use = 20
+BioGeoBEARS_run_object$cluster_already_open = cl
+```
+
+## Other parameters
+
+```{r}
+BioGeoBEARS_run_object$max_range_size = 5 
+BioGeoBEARS_run_object$include_null_range = TRUE
+BioGeoBEARS_run_object$force_sparse = FALSE
+
+BioGeoBEARS_run_object$return_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_TTL_loglike_from_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_ancprobs = TRUE
+
+
+BioGeoBEARS_run_object$use_optimx = TRUE
+
+BioGeoBEARS_run_object = section_the_tree(inputs=BioGeoBEARS_run_object, make_master_table=TRUE, plot_pieces=FALSE, cut_fossils = FALSE)
+BioGeoBEARS_run_object$master_table
+```
+
+## Set Up DIVALIKE
+
+```{r}
+# Remove subset-sympatry
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["s","type"] = "fixed"
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["s","init"] = 0.0
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["s","est"] = 0.0
+
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["ysv","type"] = "2-j"
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["ys","type"] = "ysv*1/2"
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["y","type"] = "ysv*1/2"
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["v","type"] = "ysv*1/2"
+
+# Allow classic, widespread vicariance; all events equiprobable
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["mx01v","type"] = "fixed"
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["mx01v","init"] = 0.5
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["mx01v","est"] = 0.5
+
+BioGeoBEARS_run_object = fix_BioGeoBEARS_params_minmax(BioGeoBEARS_run_object=BioGeoBEARS_run_object)
+check_BioGeoBEARS_run(BioGeoBEARS_run_object)
+```
+
+# Run DIVALIKE
+
+```{r}
+tic()
+runslow = TRUE
+resfn = "res_divalike.Rdata"
+if (runslow)
+    {
+    res = bears_optim_run(BioGeoBEARS_run_object)
+    res    
+
+    save(res, file=resfn)
+    resDIVALIKE = res
+    } else {
+    # Loads to "res"
+    load(resfn)
+    resDIVALIKE = res
+    }
+
+
+toc()
+
+stopCluster(cl)
+```
+
+# BAYAREALIKE
+
+# Setup the model
+
+```{r}
+BioGeoBEARS_run_object = define_BioGeoBEARS_run()
+```
+
+# Location of the input files
+
+```{r}
+BioGeoBEARS_run_object$trfn = np("mi_arbol.newick")
+tr = read.tree(BioGeoBEARS_run_object$trfn)
+is_ultrametric <- is.ultrametric(tr)
+print(paste("Is the tree ultrametric?", is_ultrametric))
+
+BioGeoBEARS_run_object$geogfn = np("output.phy")
+tipranges <- getranges_from_LagrangePHYLIP(lgdata_fn=BioGeoBEARS_run_object$geogfn)
+tipranges
+```
+
+# Time periods
+
+```{r}
+time_intervals <- c(2.58, 5.33, 23.03, 33.09, 56.0001, 66, 422)
+
+writeLines(as.character(time_intervals), "clean_timeperiods.txt")
+
+BioGeoBEARS_run_object$timeperiods = c(2.58, 5.33, 23.03, 33.09, 56.0001, 66, 422)
+BioGeoBEARS_run_object$timesfn = "clean_timeperiods.txt"
+```
+
+# Configure the analysis
+
+## Cluster
+
+```{r}
+cl <- makeCluster(20, type = "FORK")
+BioGeoBEARS_run_object$num_cores_to_use = 20
+BioGeoBEARS_run_object$cluster_already_open = cl
+```
+
+## Other parameters
+
+```{r}
+BioGeoBEARS_run_object$max_range_size = 5 
+BioGeoBEARS_run_object$include_null_range = TRUE
+BioGeoBEARS_run_object$force_sparse = FALSE
+
+BioGeoBEARS_run_object$return_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_TTL_loglike_from_condlikes_table = TRUE
+BioGeoBEARS_run_object$calc_ancprobs = TRUE
+
+
+BioGeoBEARS_run_object$use_optimx = TRUE
+
+BioGeoBEARS_run_object = section_the_tree(inputs=BioGeoBEARS_run_object, make_master_table=TRUE, plot_pieces=FALSE, cut_fossils = FALSE)
+BioGeoBEARS_run_object$master_table
+```
+
+## Set Up BAYAREALIKE
+
+```{r}
+# Set up BAYAREALIKE model
+# No subset sympatry
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["s","type"] = "fixed"
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["s","init"] = 0.0
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["s","est"] = 0.0
+
+# No vicariance
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["v","type"] = "fixed"
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["v","init"] = 0.0
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["v","est"] = 0.0
+
+# Adjust linkage between parameters
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["ysv","type"] = "1-j"
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["ys","type"] = "ysv*1/1"
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["y","type"] = "1-j"
+
+# Only sympatric/range-copying (y) events allowed, and with 
+# exact copying (both descendants always the same size as the ancestor)
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["mx01y","type"] = "fixed"
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["mx01y","init"] = 0.9999
+BioGeoBEARS_run_object$BioGeoBEARS_model_object@params_table["mx01y","est"] = 0.9999
+
+# Check the inputs; fixing any initial ("init") values outside min/max
+BioGeoBEARS_run_object = fix_BioGeoBEARS_params_minmax(BioGeoBEARS_run_object=BioGeoBEARS_run_object)
+check_BioGeoBEARS_run(BioGeoBEARS_run_object)
+```
+
+# Run BAYAREALIKE
+
+```{r}
+tic()
+runslow = TRUE
+resfn = "res_bayarealike.Rdata"
+if (runslow)
+    {
+    res = bears_optim_run(BioGeoBEARS_run_object)
+    res    
+
+    save(res, file=resfn)
+    resBAYAREALIKE = res
+    } else {
+    # Loads to "res"
+    load(resfn)
+    resBAYAREALIKE = res
+    }
+
+toc()
+
+#2098.064 = 35 minutes
+
+stopCluster(cl)
+```
+
+# Statistics
+
+```{r}
+
+# resDECStar<-res
+# resDIVALIKE<-res
+# resBAYAREALIKE<-res
+
+restable = NULL
+teststable = NULL
+
+LnL_2 = get_LnL_from_BioGeoBEARS_results_object(res)
+LnL_1 = get_LnL_from_BioGeoBEARS_results_object(resDECStar)
+LnL_3 = get_LnL_from_BioGeoBEARS_results_object(resDIVALIKE)
+LnL_4 = get_LnL_from_BioGeoBEARS_results_object(resBAYAREALIKE)
+
+numparams1 = 2
+numparams2 = 2
+numparams3 = 2
+numparams4 = 2
+
+stats = AICstats_2models(LnL_1, LnL_2, LnL_3, LnL_4, numparams1, numparams2,numparams3,numparams4)
+stats
+
+# DEC_M0, null model for Likelihood Ratio Test (LRT)
+res1 = extract_params_from_BioGeoBEARS_results_object(results_object=res, returnwhat="table", paramsstr_digits=4)
+# DEC_M1, alternative model for Likelihood Ratio Test (LRT)
+res2 = extract_params_from_BioGeoBEARS_results_object(results_object=resDECStar, returnwhat="table", paramsstr_digits=4)
+res3 = extract_params_from_BioGeoBEARS_results_object(results_object=resDIVALIKE, returnwhat="table", paramsstr_digits=4)
+res4 = extract_params_from_BioGeoBEARS_results_object(results_object=resBAYAREALIKE, returnwhat="table", paramsstr_digits=4)
+
+rbind(res1, res2, res3, res4)
+conditional_format_table(stats)
+
+tmp_tests = conditional_format_table(stats)
+
+restable = rbind(restable, res1, res2, res3, res4)
+teststable = rbind(teststable, tmp_tests)
+
+teststable$null = c("res")
+teststable$alt = c("resDECStar")
+teststable$alt = c("resDIVALIKE")
+teststable$alt = c("resBAYAREALIKE")
+row.names(restable) = c("res", "resDECStar", "resDIVALIKE", "resBAYAREALIKE")
+restable = put_jcol_after_ecol(restable)
+
+# Look at the results!!
+restable
+teststable
+
+
+# Model weights of all models
+#######################################################
+restable2 = restable
+
+# With AICs:
+AICtable = calc_AIC_column(LnL_vals=restable$LnL, nparam_vals=restable$numparams)
+restable = cbind(restable, AICtable)
+restable_AIC_rellike = AkaikeWeights_on_summary_table(restable=restable, colname_to_use="AIC")
+restable_AIC_rellike = put_jcol_after_ecol(restable_AIC_rellike)
+restable_AIC_rellike
+
+# With AICcs -- factors in sample size
+samplesize = length(tr$tip.label)
+AICtable = calc_AICc_column(LnL_vals=restable$LnL, nparam_vals=restable$numparams, samplesize=samplesize)
+restable2 = cbind(restable2, AICtable)
+restable_AICc_rellike = AkaikeWeights_on_summary_table(restable=restable2, colname_to_use="AICc")
+restable_AICc_rellike = put_jcol_after_ecol(restable_AICc_rellike)
+restable_AICc_rellike
+
+write.table(conditional_format_table(restable_AIC_rellike, "aicc.txt"))
+
+write_csv(restable_AIC_rellike, "restable_AIC_rellike.csv")
+
+write.table(conditional_format_table(restable_AIC_rellike), file="output_files/restable_AIC_rellike_formatted.txt", quote=FALSE, sep="\t")
+write.table(conditional_format_table(restable_AICc_rellike), file="output_files/restable_AICc_rellike_formatted.txt", quote=FALSE, sep="\t")
+
+```
